@@ -56,6 +56,7 @@ class TelnetOutMessage:
     def __init__(self, data):
         self.data = data
         self.enable_compress2 = False
+        self.close = False
 
 
 class TelnetOptionPerspective:
@@ -332,7 +333,7 @@ class TTYPEHandler(TelnetOptionHandler):
 
 class MNEShandler(TelnetOptionHandler):
     """
-    Not finished. do not enable.
+    Not ready. do not enable.
     """
     opcode = _TC.MNES
     start_do = True
@@ -417,7 +418,7 @@ class MSSPHandler(TelnetOptionHandler):
 
     def __init__(self, owner):
         super().__init__(owner)
-        owner.mssp_handler = self
+        owner.mssp = self
 
     async def enable_local(self):
         self.owner.capabilities.mssp = True
@@ -453,8 +454,6 @@ class TelnetMudConnection(MudConnection):
         self.in_compress = None
         self.handshakes = TelnetHandshakeHolder(self)
         self.host, self.host_port = self.writer.get_extra_info('peername')
-        self.timer = None
-        self.mssp_handler = None
 
         for k, v in self.handlers.items():
             if v.start_will:
@@ -477,20 +476,26 @@ class TelnetMudConnection(MudConnection):
                 self.handshakes.special.update(v.hs_special)
 
     async def check_ready(self):
-        if self.finished:
+        if self.ready:
             return
         if self.handshakes.has_remaining():
             return
-        await self.on_finish()
+        await self.on_ready()
 
     async def run_timer(self):
         await asyncio.sleep(0.3)
-        await self.on_finish()
-        self.timer = None
+        await self.on_ready()
 
     async def run(self):
-        self.timer = asyncio.create_task(self.run_timer())
-        await asyncio.gather(self.read(), self.write())
+        await self.listener.manager.announce_conn(self)
+        await asyncio.gather(self.read(), self.write(), self.keepalive(), self.run_timer())
+
+    async def keepalive(self):
+        while self.running:
+            if self.capabilities.keepalive:
+                msg = TelnetOutMessage(bytearray([_TC.IAC, _TC.NOP]))
+                await self.outbox.put(msg)
+            await asyncio.sleep(30)
 
     async def read(self):
         while self.running:
@@ -501,19 +506,29 @@ class TelnetMudConnection(MudConnection):
                 self.inbox += data
                 await self.read_telnet()
             else:
-                # oops this is a close...
-                pass
+                self.running = False
+                await self.on_disconnect()
 
     async def write(self):
         while self.running:
             msg = await self.outbox.get()
-            if self.out_compressor:
-                data = self.out_compressor.compress(msg.data) + self.out_compressor.flush(zlib.Z_SYNC_FLUSH)
+            data = msg.data
+            if data:
+                if self.out_compressor:
+                    data = self.out_compressor.compress(data) + self.out_compressor.flush(zlib.Z_SYNC_FLUSH)
                 self.writer.write(data)
-            else:
-                self.writer.write(msg.data)
             if msg.enable_compress2 and not self.out_compressor:
                 self.out_compressor = zlib.compressobj(9)
+            if msg.close and self.writer.can_write_eof():
+                self.running = False
+                if self.out_compressor:
+                    self.writer.write(self.out_compressor.flush(zlib.Z_FINISH))
+                self.writer.write_eof()
+
+    async def close(self):
+        msg = TelnetOutMessage(bytearray())
+        msg.close = True
+        await self.outbox.put(msg)
 
     async def read_telnet(self):
         while len(self.inbox) > 0:
@@ -586,9 +601,6 @@ class TelnetMudConnection(MudConnection):
             found = self.cmdbuff[:idx]
             if found.endswith(b'\r'):
                 del found[-1]
-            if found:
-                response = TelnetOutMessage(b'ECHO: ' + found + b'\n')
-                await self.outbox.put(response)
             if found and callable(self.on_command_cb):
                 if inspect.iscoroutinefunction(self.on_command_cb):
                     await self.on_command_cb(self, found)

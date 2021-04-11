@@ -12,8 +12,8 @@ async def main():
     manager = MudLinkManager()
     manager.register_listener("telnet", "any", 7999, "telnet")
     manager.on_connect_cb = got_a_conn
-    manager.start()
-    await manager.run()
+    await manager.start()
+    print("this doesn't last")
 
 if __name__ == "__main__":
     uvloop.install()

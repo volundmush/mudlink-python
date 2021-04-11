@@ -80,7 +80,7 @@ class MudLinkManager:
     def register_ssl(self, name, pem_path):
         pass
 
-    def start(self):
+    def listen(self):
         for k, v in self.listeners.items():
             if not v.task:
                 v.task = asyncio.create_task(v.run())
@@ -89,6 +89,10 @@ class MudLinkManager:
         for k, v in self.listeners.items():
             if v.running:
                 v.stop()
+
+    async def start(self):
+        self.listen()
+        await self.run()
 
     async def run(self):
         while True:

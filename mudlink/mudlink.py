@@ -63,14 +63,15 @@ class MudLinkManager:
     def register_listener(self, name, interface, port, protocol, ssl_context=None):
         if name in self.listeners:
             raise ValueError(f"A Listener is already using name: {name}")
-        if not (host := self.interfaces.get(interface, None)):
+        host = self.interfaces.get(interface, None)
+        if not host:
             raise ValueError(f"Interface not registered: {interface}")
         if port < 0 or port > 65535:
             raise ValueError(f"Invalid port: {port}. Port must be number between 0 and 65535")
         if protocol.lower() not in ("telnet", "websocket"):
             raise ValueError(f"Unsupported protocol: {protocol}. Please pick telnet or websocket")
-        ssl = None
-        if ssl_context and not (ssl := self.ssl_contexts.get(ssl_context, None)):
+        ssl = self.ssl_contexts.get(ssl_context, None)
+        if ssl_context and not ssl:
             raise ValueError(f"SSL Context not registered: {ssl_context}")
         self.listeners[name] = MudListener(self, name, host, port, protocol.lower(), ssl_context=ssl)
 

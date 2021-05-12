@@ -9,8 +9,7 @@ class Capabilities:
     def __init__(self):
         self.width = 78
         self.height = 24
-        self.ansi = False
-        self.xterm256 = False
+        self.color = 0
         self.gmcp = False
         self.msdp = False
         self.mssp = False
@@ -27,7 +26,6 @@ class Capabilities:
         self.vt100 = False
         self.osc_color_palette = False
         self.proxy = False
-        self.truecolor = False
         self.mnes = False
         self.client_name = "UNKNOWN"
         self.client_version = "UNKNOWN"

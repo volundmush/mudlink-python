@@ -4,6 +4,7 @@ import inspect
 from .mudconnection import MudConnection
 from typing import Dict
 
+
 class _TC:
     NULL = 0
     BEL = 7
@@ -299,8 +300,9 @@ class TTYPEHandler(TelnetOptionHandler):
             xterm256 = True
 
         # all clients supporting TTYPE at all seem to support ANSI
-        self.owner.capabilities.ansi = True
-        self.owner.capabilities.xterm256 = xterm256
+        if xterm256:
+            self.owner.capabilities.color = 2
+
 
     async def receive_stage_1(self, term):
         # this is a term capabilities flag
@@ -312,8 +314,7 @@ class TTYPEHandler(TelnetOptionHandler):
                 and not tupper.endswith("-COLOR")  # old Tintin, Putty
         )
         if xterm256:
-            self.owner.capabilities.ansi = True
-            self.owner.capabilities.xterm256 = xterm256
+            self.owner.capabilities.color = 2
         self.owner.capabilities.terminal_type = term
 
     async def receive_stage_2(self, option):
@@ -324,7 +325,10 @@ class TTYPEHandler(TelnetOptionHandler):
                 # a number - determine the actual capabilities
                 option = int(option)
                 for k, v in {capability: True for bitval, capability in self.mtts if option & bitval > 0}:
-                    setattr(self.owner.capabilities, k, v)
+                    if k == "truecolor" and v:
+                        self.owner.capabilities.color = 3
+                    else:
+                        setattr(self.owner.capabilities, k, v)
             else:
                 # some clients send erroneous MTTS as a string. Add directly.
                 self.owner.capabilities.mtts = True
@@ -454,6 +458,7 @@ class TelnetMudConnection(MudConnection):
         self.in_compress = None
         self.handshakes = TelnetHandshakeHolder(self)
         self.host, self.host_port = self.writer.get_extra_info('peername')
+        self.backlog = list()
 
         for k, v in self.handlers.items():
             if v.start_will:
@@ -481,6 +486,15 @@ class TelnetMudConnection(MudConnection):
         if self.handshakes.has_remaining():
             return
         await self.on_ready()
+
+    async def on_ready(self):
+        await super().on_ready()
+        for (operation, data) in self.backlog:
+            if operation == "command":
+                await self.forward_command(data)
+            elif operation == "oob":
+                await self.forward_oob(data)
+        self.backlog.clear()
 
     async def run_timer(self):
         await asyncio.sleep(0.3)
@@ -571,7 +585,7 @@ class TelnetMudConnection(MudConnection):
                     else:
                         cmd = self.inbox[1]
                         del self.inbox[0:2]
-                        await self.handle_cmd(cmd)
+                        await self.handle_command(cmd)
                         continue
             else:
                 # we are dealing with 'just data!'
@@ -601,21 +615,37 @@ class TelnetMudConnection(MudConnection):
             found = self.cmdbuff[:idx]
             if found.endswith(b'\r'):
                 del found[-1]
-            if found and callable(self.on_command_cb):
-                if inspect.iscoroutinefunction(self.on_command_cb):
-                    await self.on_command_cb(self, found)
-                else:
-                    self.on_command_cb(self, found)
+            if self.ready:
+                await self.forward_command(found)
+            else:
+                self.backlog.append(('command', found))
             del self.cmdbuff[:idx + 1]
 
+    async def forward_command(self, data):
+        if data and callable(self.on_command_cb):
+            if inspect.iscoroutinefunction(self.on_command_cb):
+                await self.on_command_cb(self, data)
+            else:
+                self.on_command_cb(self, data)
+
+    async def forward_oob(self, data):
+        if data and callable(self.on_oob_cb):
+            if inspect.iscoroutinefunction(self.on_oob_cb):
+                await self.on_oob_cb(self, data)
+            else:
+                self.on_oob_cb(self, data)
+
     async def negotiate(self, cmd, option):
-        if (handler := self.handlers.get(option, None)):
+        handler = self.handlers.get(option, None)
+        if handler:
             await handler.negotiate(cmd)
-        elif (response := NEG_OPPOSITES.get(cmd, None)):
+        else:
+            response = NEG_OPPOSITES.get(cmd, None)
             await self.send_negotiate(response, option)
 
     async def subnegotiate(self, option, data):
-        if (handler := self.handlers.get(option, None)):
+        handler = self.handlers.get(option, None)
+        if handler:
             await handler.subnegotiate(data)
 
     async def send_negotiate(self, cmd, option):
